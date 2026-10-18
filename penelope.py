@@ -3078,23 +3078,40 @@ class Session:
 						"tr", "sed", "stat", "awk", "tail", "cut", "df", "id", "du",
 						"cat", "mkfifo", "grep", "mktemp"
 					]
-					response = self.exec(f'for i in {" ".join(binaries)}; do which $i 2>/dev/null || echo;done')
-					if response:
-						self._bin.update(zip(binaries, response.decode(errors="replace").splitlines()))
+					def parse_paths(response, marker, names):
+						if not response:
+							return {}
+						if isinstance(response, bytes):
+							response = response.decode(errors="replace")
+						pattern = re.compile(
+							re.escape(marker) + r"([A-Za-z0-9_]+)=(/[^\r\n]*?)" + re.escape(marker)
+						)
+						return {
+							name: path for name, path in pattern.findall(response)
+							if name in names and os.path.isabs(path)
+						}
+
+					marker = f"__PENELOPE_BIN_{rand(12)}__"
+					response = self.exec(
+						f'for i in {" ".join(binaries)}; do '
+						'path=$(which "$i" 2>/dev/null); '
+						f'printf "%s%s=%s%s" "{marker}" "$i" "$path" "{marker}"; echo; done'
+					)
+					self._bin.update(parse_paths(response, marker, binaries))
 
 					missing = [b for b in binaries if not os.path.isabs(self._bin[b])]
 
 					if missing:
 						logger.debug(paint(f"We didn't find the binaries: {missing}. Trying another method").red)
+						marker = f"__PENELOPE_BIN_{rand(12)}__"
 						response = self.exec(
 							f'for bin in {" ".join(missing)}; do for dir in '
 							f'$(printf %s "$PATH" | tr ":" " ") '
 							f'{" ".join(LINUX_PATH.split(":"))}; do _bin=$dir/$bin; '
-							'test -x "$_bin" && break || unset _bin; done; echo "$_bin"; done'
+							'test -x "$_bin" && break || unset _bin; done; '
+							f'printf "%s%s=%s%s" "{marker}" "$bin" "$_bin" "{marker}"; echo; done'
 						)
-						if response:
-							self._bin.update(dict(zip(missing, response.decode(errors="replace").splitlines())))
-
+						self._bin.update(parse_paths(response, marker, missing))
 				for binary in options.no_bins:
 					self._bin[binary] = None
 
