@@ -5548,6 +5548,22 @@ def agent():
 
 	shell_pid, master_fd = pty.fork()
 	if shell_pid == pty.CHILD:
+		if os.path.basename(SHELL) == 'bash':
+			user_prompt = r'\[\e[1;32m\]\u@\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
+			root_prompt = r'\[\e[1;31m\]\u@\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0;37m\]# \[\e[0m\]'
+			prompt = root_prompt if os.geteuid() == 0 else user_prompt
+			# Bash rc files can reset PS1; apply the colors afterward without a temp file.
+			for fd_dir in ('/dev/fd', '/proc/self/fd'):
+				if os.path.isdir(fd_dir):
+					read_fd, write_fd = os.pipe()
+					script = 'if [ -r "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n'
+					script += "PS1='" + prompt + "'\n"
+					os.write(write_fd, script.encode())
+					os.close(write_fd)
+					flags = fcntl.fcntl(read_fd, fcntl.F_GETFD)
+					fcntl.fcntl(read_fd, fcntl.F_SETFD, flags & ~fcntl.FD_CLOEXEC)
+					os.execl(SHELL, SHELL, '--rcfile', fd_dir + '/' + str(read_fd), '-i')
+			os.environ['PS1'] = prompt
 		os.execl(SHELL, SHELL, '-i')
 	try:
 		tty.setraw(pty.STDIN_FILENO)
